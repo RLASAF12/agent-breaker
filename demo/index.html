@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>agent-breaker · Live Demo</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace; padding: 24px; }
+  header { text-align: center; margin-bottom: 24px; }
+  header h1 { font-size: 2rem; color: #58a6ff; }
+  header p  { color: #8b949e; margin-top: 4px; }
+  .demo-note { text-align: center; background: #1c2128; border: 1px solid #30363d; border-radius: 6px; padding: 10px 20px; font-size: 0.85rem; color: #8b949e; margin-bottom: 24px; display: inline-block; }
+  .center { text-align: center; }
+
+  .status-bar { display: flex; align-items: center; justify-content: center; gap: 24px; margin-bottom: 28px; flex-wrap: wrap; }
+  #badge { padding: 10px 28px; border-radius: 999px; font-size: 1.3rem; font-weight: 700; transition: all 0.4s; }
+  #badge.closed { background: #1a3a26; color: #2da44e; border: 2px solid #2da44e; }
+  #badge.open   { background: #3d1212; color: #ff7b72; border: 2px solid #da3633; animation: pulse 1s ease-in-out infinite alternate; }
+  @keyframes pulse { from { box-shadow: 0 0 0 0 #da363380; } to { box-shadow: 0 0 0 12px #da363300; } }
+
+  #cost-meter { font-size: 1.1rem; color: #8b949e; }
+  #cost-meter span { color: #f0883e; font-weight: 700; font-variant-numeric: tabular-nums; }
+  #call-counter { font-size: 0.85rem; color: #6e7681; }
+  #play-btn { background: #1f6feb; border: none; color: #fff; padding: 10px 22px; border-radius: 6px; cursor: pointer; font-size: 0.95rem; font-weight: 600; }
+  #play-btn:disabled { opacity: 0.5; cursor: default; }
+
+  #trip-panel { display: none; background: #1c0f0f; border: 1.5px solid #da3633; border-radius: 10px; padding: 20px; margin-bottom: 24px; text-align: center; }
+  #trip-panel h2 { font-size: 1.5rem; color: #ff7b72; margin-bottom: 10px; }
+  .trip-detail { color: #c9d1d9; margin: 5px 0; }
+  .trip-detail strong { color: #ff7b72; }
+  #savings-big { font-size: 2.2rem; font-weight: 800; color: #2da44e; margin-top: 10px; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 680px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 18px; }
+  .panel h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: #8b949e; margin-bottom: 12px; }
+
+  #event-list { max-height: 320px; overflow-y: auto; }
+  .event-row { padding: 7px 0; border-bottom: 1px solid #21262d; font-size: 0.8rem; }
+  .event-row:last-child { border-bottom: none; }
+  .e-time { color: #6e7681; }
+  .e-agent { color: #79c0ff; font-weight: 600; }
+  .e-tool { color: #d2a8ff; }
+  .e-count { display: inline-block; background: #21262d; border-radius: 3px; padding: 0 5px; color: #f0883e; }
+  .e-count.hot { background: #3d1212; color: #ff7b72; font-weight: 700; }
+  .e-new { animation: fadeIn 0.4s ease; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:translateY(0); } }
+
+  .fp-row { padding: 6px 0; border-bottom: 1px solid #21262d; display: flex; align-items: center; font-size: 0.8rem; }
+  .fp-name { color: #c9d1d9; flex: 1; margin-right: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fp-bar-wrap { width: 70px; height: 7px; background: #21262d; border-radius: 4px; margin-right: 8px; }
+  .fp-bar { height: 7px; border-radius: 4px; background: #1f6feb; transition: width 0.5s; }
+  .fp-bar.danger { background: #da3633; }
+  .fp-count { color: #f0883e; font-weight: 700; min-width: 24px; text-align: right; }
+
+  footer { text-align: center; margin-top: 24px; color: #6e7681; font-size: 0.8rem; }
+  footer a { color: #58a6ff; text-decoration: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🔌 agent-breaker</h1>
+  <p>Runtime loop circuit breaker for multi-agent systems</p>
+</header>
+<div class="center" style="margin-bottom:20px">
+  <span class="demo-note">⚡ Simulated demo — watch a $47K runaway loop get stopped in real time</span>
+</div>
+
+<div class="status-bar">
+  <div id="badge" class="closed">● CLOSED</div>
+  <div id="cost-meter">Burning: $<span id="burn">0.00</span> / hr</div>
+  <div id="call-counter">Call <span id="call-num">0</span> / ~12</div>
+  <button id="play-btn" onclick="startDemo()">▶ Run Demo</button>
+</div>
+
+<div id="trip-panel">
+  <h2>🔴 LOOP DETECTED — CIRCUIT OPEN</h2>
+  <div class="trip-detail">Pattern repeated <strong>3×</strong> in last 6 calls</div>
+  <div class="trip-detail">Agents in loop: <strong>Analyzer ↔ Verifier</strong></div>
+  <div class="trip-detail">Killed at <strong id="kill-time">—</strong></div>
+  <div id="savings-big">Saved $47,000</div>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h3>Event Stream</h3>
+    <div id="event-list"><div style="color:#6e7681;font-size:0.85rem">Press ▶ Run Demo to start…</div></div>
+  </div>
+  <div class="panel">
+    <h3>Fingerprint Heat Map</h3>
+    <div id="fp-list"><div style="color:#6e7681;font-size:0.85rem">No patterns yet.</div></div>
+  </div>
+</div>
+
+<footer style="margin-top:28px">
+  <a href="https://github.com/RLASAF12/agent-breaker">GitHub →</a>
+  &nbsp;·&nbsp; Built by <a href="https://harelasaf.com">Harel Asaf</a>
+</footer>
+
+<script>
+const SCENARIO = [
+  { agentId:'Analyzer',  toolName:'tool_summarize',  input:'Analyze this financial document...', output:'Summary: Revenue stable. Recommend verification.', delay:800 },
+  { agentId:'Verifier',  toolName:'tool_validate',   input:'Verify this summary: Revenue stable.', output:'Cannot confirm. Please re-analyze with context.', delay:900 },
+  { agentId:'Analyzer',  toolName:'tool_summarize',  input:'Analyze this financial document...', output:'Summary: Revenue stable. Recommend verification.', delay:800 },
+  { agentId:'Verifier',  toolName:'tool_validate',   input:'Verify this summary: Revenue stable.', output:'Inconsistent. Please re-analyze with updated context.', delay:900 },
+  { agentId:'Analyzer',  toolName:'tool_summarize',  input:'Analyze this financial document...', output:'Summary: Revenue stable. Recommend verification.', delay:800 },
+  { agentId:'Verifier',  toolName:'tool_validate',   input:'Verify this summary: Revenue stable.', output:'Still cannot confirm. Loop detected risk.', delay:900 },
+  { agentId:'Analyzer',  toolName:'tool_summarize',  input:'Analyze this financial document...', output:'TRIP', delay:700 },
+];
+
+let history = [], fpMap = {}, callNum = 0, burnRate = 0, burnInterval;
+
+function fingerprint(e) { return e.toolName + ':' + JSON.stringify(e.input).slice(0,80); }
+
+function startDemo() {
+  document.getElementById('play-btn').disabled = true;
+  history = []; fpMap = {}; callNum = 0;
+  document.getElementById('event-list').innerHTML = '';
+  document.getElementById('fp-list').innerHTML = '<div style="color:#6e7681;font-size:0.85rem">No patterns yet.</div>';
+  document.getElementById('trip-panel').style.display = 'none';
+  document.getElementById('badge').className = 'closed';
+  document.getElementById('badge').textContent = '● CLOSED';
+  document.getElementById('burn').textContent = '0.00';
+  document.getElementById('call-num').textContent = '0';
+  burnRate = 0;
+  if (burnInterval) clearInterval(burnInterval);
+  playNext(0);
+}
+
+function playNext(idx) {
+  if (idx >= SCENARIO.length) return;
+  const ev = SCENARIO[idx];
+  setTimeout(() => {
+    callNum++;
+    document.getElementById('call-num').textContent = callNum;
+    burnRate += 4200;
+    document.getElementById('burn').textContent = burnRate.toLocaleString();
+
+    const fp = fingerprint(ev);
+    history.unshift({ ...ev, fingerprint: fp, timestamp: new Date().toISOString() });
+    fpMap[fp] = (fpMap[fp] || 0) + 1;
+    renderEvents();
+    renderFp();
+
+    const maxCount = Math.max(...Object.values(fpMap));
+    if (maxCount >= 3 && document.getElementById('badge').className !== 'open') {
+      setTimeout(trip, 400);
+    } else {
+      playNext(idx + 1);
+    }
+  }, ev.delay);
+}
+
+function renderEvents() {
+  const el = document.getElementById('event-list');
+  el.innerHTML = history.slice(0, 14).map((h, i) => {
+    const cnt = fpMap[h.fingerprint] || 1;
+    const hot = cnt >= 3;
+    return '<div class="event-row' + (i===0?' e-new':'') + '">' +
+      '<span class="e-time">' + h.timestamp.slice(11,19) + '</span>' +
+      ' <span class="e-agent">' + h.agentId + '</span>' +
+      ' → <span class="e-tool">' + h.toolName + '</span>' +
+      ' <span class="e-count ' + (hot?'hot':'') + '">' + cnt + '×</span>' +
+      '</div>';
+  }).join('');
+}
+
+function renderFp() {
+  const el = document.getElementById('fp-list');
+  const sorted = Object.entries(fpMap).sort((a,b) => b[1]-a[1]);
+  const maxV = Math.max(...Object.values(fpMap), 1);
+  el.innerHTML = sorted.slice(0,6).map(function(entry) {
+    const fp = entry[0], cnt = entry[1];
+    const pct = Math.round((cnt/maxV)*100);
+    const danger = cnt >= 3;
+    return '<div class="fp-row">' +
+      '<div class="fp-name">' + fp.slice(0,36) + (fp.length>36?'…':'') + '</div>' +
+      '<div class="fp-bar-wrap"><div class="fp-bar ' + (danger?'danger':'') + '" style="width:' + pct + '%"></div></div>' +
+      '<div class="fp-count">' + cnt + '</div></div>';
+  }).join('');
+}
+
+function trip() {
+  const badge = document.getElementById('badge');
+  badge.className = 'open';
+  badge.textContent = '⚠ OPEN';
+  const panel = document.getElementById('trip-panel');
+  panel.style.display = 'block';
+  const now = new Date().toISOString().slice(0,19).replace('T',' ') + ' UTC';
+  document.getElementById('kill-time').textContent = now;
+  if (burnInterval) clearInterval(burnInterval);
+  document.getElementById('play-btn').disabled = false;
+  document.getElementById('play-btn').textContent = '↺ Replay';
+  document.getElementById('call-num').textContent = callNum + ' (killed)';
+}
+</script>
+</body>
+</html>
