@@ -1,0 +1,30 @@
+{
+  "name": "agent-breaker",
+  "version": "0.1.0",
+  "description": "Runtime loop circuit breaker for multi-agent systems. Detects runaway patterns before they burn your budget.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "agents",
+    "circuit-breaker",
+    "loop-detection",
+    "langchain",
+    "langgraph",
+    "autogen",
+    "ai-safety",
+    "multi-agent",
+    "cost-control"
+  ],
+  "author": "Harel Asaf <harelasaf7@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.16.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
