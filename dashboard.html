@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>agent-breaker · Runtime Loop Circuit Breaker</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace; padding: 24px; }
+  header { text-align: center; margin-bottom: 32px; }
+  header h1 { font-size: 2rem; color: #58a6ff; }
+  header p  { color: #8b949e; margin-top: 4px; font-size: 0.95rem; }
+  .status-bar { display: flex; align-items: center; justify-content: center; gap: 24px; margin-bottom: 32px; flex-wrap: wrap; }
+  #badge { padding: 10px 28px; border-radius: 999px; font-size: 1.3rem; font-weight: 700; transition: all 0.4s; }
+  #badge.closed { background: #1a3a26; color: #2da44e; border: 2px solid #2da44e; }
+  #badge.open   { background: #3d1212; color: #ff7b72; border: 2px solid #da3633; animation: pulse 1s ease-in-out infinite alternate; }
+  @keyframes pulse { from { box-shadow: 0 0 0 0 #da363380; } to { box-shadow: 0 0 0 12px #da363300; } }
+  #cost-saved { font-size: 1.1rem; color: #8b949e; }
+  #cost-saved span { color: #2da44e; font-weight: 700; }
+  #window-info { font-size: 0.85rem; color: #6e7681; }
+  #reset-btn { background: #21262d; border: 1px solid #30363d; color: #e6edf3; padding: 8px 18px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
+  #reset-btn:hover { background: #30363d; }
+  #trip-panel { display: none; background: #1c0f0f; border: 1.5px solid #da3633; border-radius: 10px; padding: 24px; margin-bottom: 28px; text-align: center; }
+  #trip-panel h2 { font-size: 1.6rem; color: #ff7b72; margin-bottom: 12px; }
+  .trip-detail { font-size: 1rem; color: #c9d1d9; margin: 6px 0; }
+  .trip-detail strong { color: #ff7b72; }
+  #savings-big { font-size: 2rem; font-weight: 800; color: #2da44e; margin-top: 12px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 18px; }
+  .panel h3 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; color: #8b949e; margin-bottom: 14px; }
+  #event-list { max-height: 340px; overflow-y: auto; }
+  .event-row { padding: 8px 0; border-bottom: 1px solid #21262d; font-size: 0.82rem; }
+  .event-row:last-child { border-bottom: none; }
+  .e-time { color: #6e7681; }
+  .e-agent { color: #79c0ff; font-weight: 600; }
+  .e-tool { color: #d2a8ff; }
+  .e-fp { color: #8b949e; font-size: 0.76rem; word-break: break-all; }
+  .e-count { display: inline-block; background: #21262d; border-radius: 4px; padding: 1px 6px; color: #f0883e; }
+  .e-count.hot { background: #3d1212; color: #ff7b72; font-weight: 700; }
+  #fingerprint-list .fp-row { padding: 6px 0; border-bottom: 1px solid #21262d; display: flex; justify-content: space-between; align-items: center; font-size: 0.82rem; }
+  .fp-name { color: #c9d1d9; word-break: break-all; flex: 1; margin-right: 10px; }
+  .fp-bar-wrap { width: 80px; height: 8px; background: #21262d; border-radius: 4px; }
+  .fp-bar { height: 8px; border-radius: 4px; background: #1f6feb; transition: width 0.4s; }
+  .fp-bar.danger { background: #da3633; }
+  .fp-count { color: #f0883e; font-weight: 700; min-width: 28px; text-align: right; }
+  #conn-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #6e7681; margin-right: 6px; }
+  #conn-dot.live { background: #2da44e; }
+  #conn-label { font-size: 0.75rem; color: #6e7681; }
+  .footer-bar { margin-top: 18px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🔌 agent-breaker</h1>
+  <p>Runtime loop circuit breaker for multi-agent systems</p>
+</header>
+
+<div class="status-bar">
+  <div id="badge" class="closed">● CLOSED</div>
+  <div id="cost-saved">Cost saved: <span id="savings">$0.00</span></div>
+  <div id="window-info">Window: <span id="win-count">0</span> / <span id="win-size">20</span> calls</div>
+  <button id="reset-btn" onclick="resetCircuit()">↺ Reset</button>
+</div>
+
+<div id="trip-panel">
+  <h2>🔴 LOOP DETECTED — CIRCUIT OPEN</h2>
+  <div class="trip-detail">Pattern repeated <strong id="tp-count">?</strong> times in window</div>
+  <div class="trip-detail">Loop fingerprint: <strong id="tp-pattern">?</strong></div>
+  <div class="trip-detail">Killed at <strong id="tp-time">?</strong></div>
+  <div id="savings-big">Saved <span id="tp-savings">?</span></div>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h3>Event Stream</h3>
+    <div id="event-list"><div style="color:#6e7681;font-size:0.85rem">Waiting for events…</div></div>
+  </div>
+  <div class="panel">
+    <h3>Fingerprint Heat Map</h3>
+    <div id="fingerprint-list"><div style="color:#6e7681;font-size:0.85rem">No patterns yet.</div></div>
+  </div>
+</div>
+
+<div class="footer-bar">
+  <span id="conn-dot"></span>
+  <span id="conn-label">Connecting…</span>
+</div>
+
+<script>
+let ws, state = { status:'CLOSED', history:[], tripEvent:null, windowSize:20, threshold:3 };
+let fpMap = {};
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(proto + '://' + location.host);
+  ws.onopen = () => setConn(true);
+  ws.onclose = () => { setConn(false); setTimeout(connect, 3000); };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'CONNECTED') applyState(msg.state);
+    if (msg.type === 'TRIP_EVENT') onTrip(msg);
+  };
+}
+
+function setConn(live) {
+  document.getElementById('conn-dot').className = live ? 'live' : '';
+  document.getElementById('conn-label').textContent = live ? 'Live' : 'Reconnecting…';
+}
+
+function applyState(s) {
+  state = Object.assign(state, s);
+  renderBadge(s.status);
+  renderHistory(s.history || []);
+  if (s.tripEvent) onTrip(s.tripEvent);
+}
+
+function renderBadge(status) {
+  const b = document.getElementById('badge');
+  b.className = status === 'OPEN' ? 'open' : 'closed';
+  b.textContent = status === 'OPEN' ? '⚠ OPEN' : '● CLOSED';
+}
+
+function renderHistory(history) {
+  const el = document.getElementById('event-list');
+  if (!history.length) { el.innerHTML = '<div style="color:#6e7681;font-size:0.85rem">Waiting for events…</div>'; return; }
+  fpMap = {};
+  history.forEach(h => { fpMap[h.fingerprint] = (fpMap[h.fingerprint] || 0) + 1; });
+  const maxCount = Math.max(...Object.values(fpMap), 1);
+  const threshold = state.threshold || 3;
+  el.innerHTML = [...history].reverse().slice(0, 20).map(h => {
+    const cnt = fpMap[h.fingerprint] || 1;
+    const hot = cnt >= threshold;
+    return '<div class="event-row">' +
+      '<span class="e-time">' + (h.timestamp ? h.timestamp.slice(11,19) : '') + '</span>' +
+      ' <span class="e-agent">' + (h.agentId || '?') + '</span>' +
+      ' → <span class="e-tool">' + (h.fingerprint||'').split(':')[0] + '</span>' +
+      ' <span class="e-count ' + (hot?'hot':'') + '">' + cnt + '×</span>' +
+      '<div class="e-fp">' + (h.fingerprint||'').slice(0,60) + '</div>' +
+      '</div>';
+  }).join('');
+  document.getElementById('win-count').textContent = history.length;
+  document.getElementById('win-size').textContent = state.windowSize || 20;
+  renderFpMap(fpMap, maxCount, threshold);
+}
+
+function renderFpMap(fpMap, maxCount, threshold) {
+  const el = document.getElementById('fingerprint-list');
+  const sorted = Object.entries(fpMap).sort((a,b) => b[1]-a[1]);
+  if (!sorted.length) { el.innerHTML = '<div style="color:#6e7681;font-size:0.85rem">No patterns yet.</div>'; return; }
+  el.innerHTML = sorted.slice(0, 10).map(function(entry) {
+    const fp = entry[0], cnt = entry[1];
+    const pct = Math.round((cnt/maxCount)*100);
+    const danger = cnt >= threshold;
+    return '<div class="fp-row">' +
+      '<div class="fp-name">' + fp.slice(0,40) + (fp.length>40?'…':'') + '</div>' +
+      '<div class="fp-bar-wrap"><div class="fp-bar ' + (danger?'danger':'') + '" style="width:' + pct + '%"></div></div>' +
+      '<div class="fp-count">' + cnt + '</div></div>';
+  }).join('');
+}
+
+function onTrip(tripEvent) {
+  renderBadge('OPEN');
+  const panel = document.getElementById('trip-panel');
+  panel.style.display = 'block';
+  document.getElementById('tp-count').textContent = tripEvent.callCount || '?';
+  document.getElementById('tp-pattern').textContent = tripEvent.loopPattern || 'repetitive fingerprint';
+  const ts = tripEvent.timestamp ? tripEvent.timestamp.slice(0,19).replace('T',' ') : '?';
+  document.getElementById('tp-time').textContent = ts;
+  const s = typeof tripEvent.estimatedCostSaved === 'number'
+    ? '$' + tripEvent.estimatedCostSaved.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,',')
+    : '?';
+  document.getElementById('tp-savings').textContent = s;
+  document.getElementById('savings-big').textContent = 'Saved ' + s;
+  document.getElementById('savings').textContent = s;
+}
+
+async function resetCircuit() {
+  await fetch('/reset', { method:'POST' });
+  document.getElementById('trip-panel').style.display = 'none';
+  fpMap = {};
+  state.status = 'CLOSED';
+  state.history = [];
+  state.tripEvent = null;
+  renderBadge('CLOSED');
+  document.getElementById('savings').textContent = '$0.00';
+  document.getElementById('event-list').innerHTML = '<div style="color:#6e7681;font-size:0.85rem">Reset. Waiting for events…</div>';
+  document.getElementById('fingerprint-list').innerHTML = '<div style="color:#6e7681;font-size:0.85rem">No patterns yet.</div>';
+  document.getElementById('win-count').textContent = '0';
+}
+
+setInterval(async function() {
+  try {
+    const r = await fetch('/status');
+    const s = await r.json();
+    state.windowSize = s.windowSize;
+    state.threshold = s.threshold;
+    renderHistory(s.history || []);
+    if (s.status === 'OPEN' && s.tripEvent) onTrip(s.tripEvent);
+  } catch(e) {}
+}, 2000);
+
+connect();
+</script>
+</body>
+</html>
